@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "PowerShell(rustc --version)",
+      "PowerShell(cargo --version)",
+      "Bash(winget search *)",
+      "Bash(npm list *)",
+      "Bash(npm install *)",
+      "Bash(cd /tmp)",
+      "Bash(curl -o rustup-init.exe https://win.rustup.rs/x86_64)"
+    ]
+  }
+}
