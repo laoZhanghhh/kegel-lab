@@ -1,6 +1,5 @@
-use std::sync::Arc;
 use tokio::sync::Mutex;
-use tauri::{State, Emitter};
+use tauri::{State, Emitter, WebviewWindow};
 
 struct TimerState {
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -14,8 +13,8 @@ impl TimerState {
 
 #[tauri::command]
 async fn start_timer(
-    window: tauri::Window,
-    state: State<'_, Arc<Mutex<TimerState>>>,
+    window: WebviewWindow,
+    state: State<'_, Mutex<TimerState>>,
 ) -> Result<(), String> {
     let mut state = state.lock().await;
     if state.handle.is_some() {
@@ -36,7 +35,7 @@ async fn start_timer(
 }
 
 #[tauri::command]
-async fn stop_timer(state: State<'_, Arc<Mutex<TimerState>>>) -> Result<(), String> {
+async fn stop_timer(state: State<'_, Mutex<TimerState>>) -> Result<(), String> {
     let mut state = state.lock().await;
     if let Some(handle) = state.handle.take() {
         handle.abort();
@@ -45,29 +44,43 @@ async fn stop_timer(state: State<'_, Arc<Mutex<TimerState>>>) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn minimize_window(window: tauri::Window) {
-    window.minimize().unwrap();
-}
-
-#[tauri::command]
-fn maximize_window(window: tauri::Window) {
-    if window.is_maximized().unwrap() {
-        window.unmaximize().unwrap();
-    } else {
-        window.maximize().unwrap();
+async fn minimize_window(_window: WebviewWindow) -> Result<(), String> {
+    // 只有在非手机端（即 Windows / Mac / Linux 桌面端）才真正执行最小化
+    #[cfg(not(mobile))]
+    {
+        _window.minimize().map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
 #[tauri::command]
-fn close_window(window: tauri::Window) {
-    window.close().unwrap();
+async fn maximize_window(_window: WebviewWindow) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    {
+        let is_max = _window.is_maximized().map_err(|e| e.to_string())?;
+        if is_max {
+            _window.unmaximize().map_err(|e| e.to_string())?;
+        } else {
+            _window.maximize().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_window(_window: WebviewWindow) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    {
+        _window.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
-    .manage(Arc::new(Mutex::new(TimerState::new())))
+    .manage(Mutex::new(TimerState::new()))
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
