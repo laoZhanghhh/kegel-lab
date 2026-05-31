@@ -164,12 +164,6 @@ function TunerView() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="bg-slate-900 text-white p-4 text-center">
-        <h2 className="text-lg font-bold">吉他调音器</h2>
-        <p className="text-xs text-slate-400">对着吉他麦克风调音</p>
-      </div>
-
       {/* Tuner Display */}
       <div className="flex-grow flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-800 to-slate-900">
         {/* Note Display */}
@@ -362,11 +356,6 @@ function MetronomeView() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="bg-slate-900 text-white p-4 text-center">
-        <h2 className="text-lg font-bold">节拍器</h2>
-        <p className="text-xs text-slate-400">设置节拍速度</p>
-      </div>
 
       {/* Beat Visualization */}
       <div className="flex-grow flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-800 to-slate-900">
@@ -505,7 +494,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('tuner');
 
   return (
-    <div className="h-screen flex flex-col bg-slate-900 overflow-hidden">
+    <div className="h-screen flex flex-col bg-slate-900" style={{
+      paddingTop: 'env(safe-area-inset-top)',
+      paddingBottom: 'env(safe-area-inset-bottom)',
+    }}>
       {/* Tab Navigation */}
       <div className="flex bg-slate-800 border-b border-slate-700">
         <button
@@ -533,7 +525,7 @@ export default function App() {
       </div>
 
       {/* Content */}
-      <div className="flex-grow overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-behavior-contain">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
