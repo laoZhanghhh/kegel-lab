@@ -1,490 +1,552 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import { useState, useEffect, useRef } from 'react';
-import { motion } from 'motion/react';
-import { sendNotification } from '@tauri-apps/plugin-notification';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
-  Bell,
-  BellOff,
-  History,
+  Music,
   Timer,
-  Calendar,
   Volume2,
-  VolumeX,
-  Trash2,
-  Trophy,
-  Heart,
-  Smile,
-  Zap,
-  Star,
-  Minus,
-  Square,
-  X
+  Play,
+  Pause,
+  SkipBack,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
-import img6411 from './assets/6411.png';
-import img6412 from './assets/6412.png';
-import img6413 from './assets/6413.png';
 
+// Guitar string frequencies (standard tuning, Hz)
+const STRING_FREQUENCIES = [
+  { name: 'E2', freq: 82.41, color: '#FF6B6B' },
+  { name: 'A2', freq: 110.00, color: '#FFE66D' },
+  { name: 'D3', freq: 146.83, color: '#4ECDC4' },
+  { name: 'G3', freq: 196.00, color: '#45B7D1' },
+  { name: 'B3', freq: 246.94, color: '#96CEB4' },
+  { name: 'E4', freq: 329.63, color: '#DDA0DD' },
+];
 
-// --- Types ---
-interface CheckIn {
-  id: string;
-  timestamp: number;
-  type: 'manual' | 'scheduled';
+// Common BPMs for preset buttons
+const BPM_PRESETS = [40, 60, 80, 100, 120, 140, 160, 180, 200, 220];
+
+type TabType = 'tuner' | 'metronome';
+
+function TunerView() {
+  const [isListening, setIsListening] = useState(false);
+  const [detectedFreq, setDetectedFreq] = useState<number | null>(null);
+  const [detectedNote, setDetectedNote] = useState<string>('');
+  const [cents, setCents] = useState<number>(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationRef = useRef<number | null>(null);
+
+  const noteFromFreq = useCallback((freq: number) => {
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const A4 = 440;
+    const semitones = 12 * Math.log2(freq / A4);
+    const noteIndex = Math.round(semitones) + 9; // A is index 9 in C-major scale
+    const octave = Math.floor((noteIndex + 3) / 12) + 4;
+    const note = noteNames[((noteIndex % 12) + 12) % 12];
+    const centsOff = Math.round((semitones - Math.round(semitones)) * 100);
+    return { note, octave, cents: centsOff, name: `${note}${octave}` };
+  }, []);
+
+  const findClosestString = useCallback((freq: number) => {
+    let closest = STRING_FREQUENCIES[0];
+    let minDiff = Math.abs(freq - closest.freq);
+
+    for (const string of STRING_FREQUENCIES) {
+      const diff = Math.abs(freq - string.freq);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = string;
+      }
+    }
+    return closest;
+  }, []);
+
+  const analyzeAudio = useCallback(() => {
+    if (!analyserRef.current) return;
+
+    const analyser = analyserRef.current;
+    const bufferLength = analyser.fftSize;
+    const buffer = new Float32Array(bufferLength);
+    analyser.getFloatTimeDomainData(buffer);
+
+    // Autocorrelation to find fundamental frequency
+    const sampleRate = audioContextRef.current?.sampleRate || 44100;
+
+    // Find zero crossings
+    let lastZero = 0;
+    let periods: number[] = [];
+
+    for (let i = 1; i < bufferLength; i++) {
+      if (buffer[i - 1] >= 0 && buffer[i] < 0) {
+        const period = (i - lastZero) / sampleRate;
+        if (period > 0.002 && period < 0.1) { // Valid guitar period range
+          periods.push(period);
+        }
+        lastZero = i;
+      }
+    }
+
+    if (periods.length > 0) {
+      const avgPeriod = periods.reduce((a, b) => a + b, 0) / periods.length;
+      const freq = 1 / avgPeriod;
+
+      if (freq > 60 && freq < 500) {
+        setDetectedFreq(freq);
+        const noteInfo = noteFromFreq(freq);
+        setDetectedNote(noteInfo.name);
+        setCents(noteInfo.cents);
+      }
+    }
+
+    animationRef.current = requestAnimationFrame(analyzeAudio);
+  }, [noteFromFreq]);
+
+  const startListening = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 4096;
+      analyserRef.current = analyser;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
+      source.connect(analyser);
+
+      setIsListening(true);
+      analyzeAudio();
+    } catch (err) {
+      console.error('Error accessing microphone:', err);
+      alert('无法访问麦克风，请检查权限设置');
+    }
+  };
+
+  const stopListening = () => {
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+    }
+    setIsListening(false);
+    setDetectedFreq(null);
+    setDetectedNote('');
+    setCents(0);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopListening();
+    };
+  }, []);
+
+  const getCentsDisplay = () => {
+    if (cents === 0) return '0';
+    return cents > 0 ? `+${cents}` : `${cents}`;
+  };
+
+  const getTuningIndicator = () => {
+    if (Math.abs(cents) <= 5) return { text: '完美!', color: '#4ECDC4' };
+    if (Math.abs(cents) <= 15) return { text: cents > 0 ? '稍高' : '稍低', color: '#FFE66D' };
+    return { text: cents > 0 ? '太高' : '太低', color: '#FF6B6B' };
+  };
+
+  const indicator = getTuningIndicator();
+  const closestString = detectedFreq ? findClosestString(detectedFreq) : null;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="bg-slate-900 text-white p-4 text-center">
+        <h2 className="text-lg font-bold">吉他调音器</h2>
+        <p className="text-xs text-slate-400">对着吉他麦克风调音</p>
+      </div>
+
+      {/* Tuner Display */}
+      <div className="flex-grow flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-800 to-slate-900">
+        {/* Note Display */}
+        <motion.div
+          key={detectedNote}
+          initial={{ scale: 0.9 }}
+          animate={{ scale: 1 }}
+          className="relative mb-8"
+        >
+          <div
+            className="w-40 h-40 rounded-full border-8 flex items-center justify-center"
+            style={{
+              borderColor: detectedNote ? indicator.color : '#374151',
+              backgroundColor: '#1f2937'
+            }}
+          >
+            <span
+              className="text-6xl font-black"
+              style={{ color: detectedNote ? indicator.color : '#6b7280' }}
+            >
+              {detectedNote || '--'}
+            </span>
+          </div>
+
+          {/* Cents Indicator Ring */}
+          <svg className="absolute inset-0 w-full h-full -rotate-90">
+            <circle
+              cx="80"
+              cy="80"
+              r="76"
+              fill="none"
+              stroke={detectedNote ? indicator.color : '#374151'}
+              strokeWidth="4"
+              strokeDasharray={`${Math.min(Math.abs(cents) * 2, 477)} 477`}
+              strokeLinecap="round"
+              className="transition-all duration-150"
+            />
+          </svg>
+        </motion.div>
+
+        {/* Frequency Display */}
+        <div className="text-center mb-6">
+          <p className="text-3xl font-bold text-white">
+            {detectedFreq ? `${detectedFreq.toFixed(1)} Hz` : '-- Hz'}
+          </p>
+          <p className="text-sm text-slate-400 mt-1">
+            {detectedNote ? `与 ${closestString?.name}(${closestString?.freq.toFixed(1)}Hz) 比较` : '等待声音...'}
+          </p>
+        </div>
+
+        {/* Cents & Status */}
+        <div className="flex items-center gap-4 mb-8">
+          <div
+            className="px-4 py-2 rounded-full font-bold text-lg"
+            style={{ backgroundColor: detectedNote ? indicator.color + '30' : '#374151' }}
+          >
+            <span style={{ color: detectedNote ? indicator.color : '#6b7280' }}>
+              {getCentsDisplay()} cents
+            </span>
+          </div>
+          <div
+            className="px-4 py-2 rounded-full font-bold text-lg"
+            style={{ backgroundColor: detectedNote ? indicator.color + '30' : '#374151' }}
+          >
+            <span style={{ color: detectedNote ? indicator.color : '#6b7280' }}>
+              {detectedNote ? indicator.text : '等待中'}
+            </span>
+          </div>
+        </div>
+
+        {/* String Reference */}
+        <div className="w-full bg-slate-800/50 rounded-2xl p-4">
+          <p className="text-xs text-slate-400 text-center mb-3 font-bold">标准调弦参考</p>
+          <div className="flex justify-between">
+            {STRING_FREQUENCIES.map((string) => (
+              <div key={string.name} className="text-center">
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-black text-white mb-1"
+                  style={{ backgroundColor: string.color }}
+                >
+                  {string.name[0]}
+                </div>
+                <p className="text-[10px] text-slate-500 font-mono">{string.freq.toFixed(0)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Control Button */}
+      <div className="p-6 bg-slate-900">
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={isListening ? stopListening : startListening}
+          className={`w-full py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-colors ${
+            isListening
+              ? 'bg-red-500 text-white'
+              : 'bg-teal-500 text-white'
+          }`}
+        >
+          {isListening ? (
+            <>
+              <Pause size={24} /> 停止
+            </>
+          ) : (
+            <>
+              <Volume2 size={24} /> 开始调音
+            </>
+          )}
+        </motion.button>
+      </div>
+    </div>
+  );
 }
 
-// --- Custom Title Bar Component ---
-function TitleBar() {
-  const handleMinimize = async () => {
-    await invoke('minimize_window');
-  };
+function MetronomeView() {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [bpm, setBpm] = useState(120);
+  const [beats, setBeats] = useState(4);
+  const [currentBeat, setCurrentBeat] = useState(0);
+  const [volume] = useState(true);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const intervalRef = useRef<number | null>(null);
 
-  const handleMaximize = async () => {
-    await invoke('maximize_window');
-  };
+  const playClick = useCallback((isAccent: boolean) => {
+    if (!volume) return;
 
-  const handleClose = async () => {
-    await invoke('close_window');
+    const audioContext = new AudioContext();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.frequency.value = isAccent ? 1000 : 800;
+    oscillator.type = 'sine';
+
+    gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.1);
+
+    setTimeout(() => audioContext.close(), 200);
+  }, [volume]);
+
+  const startMetronome = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+
+    const intervalMs = (60 / bpm) * 1000;
+    let beatCount = 0;
+
+    playClick(beatCount === 0);
+    setCurrentBeat(0);
+
+    intervalRef.current = window.setInterval(() => {
+      beatCount = (beatCount + 1) % beats;
+      playClick(beatCount === 0);
+      setCurrentBeat(beatCount);
+    }, intervalMs);
+
+    setIsPlaying(true);
+  }, [bpm, beats, playClick]);
+
+  const stopMetronome = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setIsPlaying(false);
+    setCurrentBeat(0);
+  }, []);
+
+  useEffect(() => {
+    if (isPlaying) {
+      stopMetronome();
+      startMetronome();
+    }
+  }, [bpm, beats]);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+  const adjustBpm = (delta: number) => {
+    setBpm(prev => Math.max(20, Math.min(300, prev + delta)));
   };
 
   return (
-    <div
-      data-tauri-drag-region
-      className="fixed top-0 left-0 right-0 h-8 bg-slate-900 flex items-center justify-between px-2 z-50 select-none"
-    >
-      <div data-tauri-drag-region className="flex items-center gap-2">
-        <div className="w-5 h-5 bg-dopa-pink rounded flex items-center justify-center">
-          <Smile size={12} className="text-white" />
-        </div>
-        <span data-tauri-drag-region className="text-white text-xs font-bold">快乐提肛Lab</span>
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="bg-slate-900 text-white p-4 text-center">
+        <h2 className="text-lg font-bold">节拍器</h2>
+        <p className="text-xs text-slate-400">设置节拍速度</p>
       </div>
-      <div className="flex items-center">
-        <button
-          onClick={handleMinimize}
-          className="w-11 h-8 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+
+      {/* Beat Visualization */}
+      <div className="flex-grow flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-800 to-slate-900">
+        {/* Beat Indicators */}
+        <div className="flex gap-4 mb-8">
+          {Array.from({ length: beats }).map((_, i) => (
+            <motion.div
+              key={i}
+              animate={{
+                scale: currentBeat === i && isPlaying ? 1.3 : 1,
+                backgroundColor: currentBeat === i && isPlaying
+                  ? (i === 0 ? '#FF6B6B' : '#4ECDC4')
+                  : '#374151'
+              }}
+              className="w-12 h-12 rounded-full flex items-center justify-center"
+            >
+              <span className="text-white font-black">{i + 1}</span>
+            </motion.div>
+          ))}
+        </div>
+
+        {/* BPM Display */}
+        <div className="text-center mb-8">
+          <p className="text-8xl font-black text-white tabular-nums">{bpm}</p>
+          <p className="text-slate-400 font-bold">BPM</p>
+        </div>
+
+        {/* BPM Controls */}
+        <div className="flex items-center gap-6 mb-8">
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => adjustBpm(-5)}
+            className="w-14 h-14 rounded-full bg-slate-700 text-white flex items-center justify-center"
+          >
+            <ChevronDown size={24} />
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => adjustBpm(-1)}
+            className="w-10 h-10 rounded-full bg-slate-600 text-white flex items-center justify-center"
+          >
+            -1
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => adjustBpm(1)}
+            className="w-10 h-10 rounded-full bg-slate-600 text-white flex items-center justify-center"
+          >
+            +1
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.9 }}
+            onClick={() => adjustBpm(5)}
+            className="w-14 h-14 rounded-full bg-slate-700 text-white flex items-center justify-center"
+          >
+            <ChevronUp size={24} />
+          </motion.button>
+        </div>
+
+        {/* Preset Buttons */}
+        <div className="w-full mb-8">
+          <p className="text-xs text-slate-400 text-center mb-3 font-bold">常用速度</p>
+          <div className="grid grid-cols-5 gap-2">
+            {BPM_PRESETS.map((preset) => (
+              <motion.button
+                key={preset}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => setBpm(preset)}
+                className={`py-2 rounded-lg font-bold text-xs transition-colors ${
+                  bpm === preset
+                    ? 'bg-teal-500 text-white'
+                    : 'bg-slate-700 text-slate-300'
+                }`}
+              >
+                {preset}
+              </motion.button>
+            ))}
+          </div>
+        </div>
+
+        {/* Time Signature */}
+        <div className="w-full bg-slate-800/50 rounded-2xl p-4">
+          <p className="text-xs text-slate-400 text-center mb-3 font-bold">拍号</p>
+          <div className="flex justify-center gap-4">
+            {[2, 3, 4, 6].map((sig) => (
+              <motion.button
+                key={sig}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => setBeats(sig)}
+                className={`w-16 h-16 rounded-xl flex flex-col items-center justify-center font-bold transition-colors ${
+                  beats === sig
+                    ? 'bg-teal-500 text-white'
+                    : 'bg-slate-700 text-slate-300'
+                }`}
+              >
+                <span className="text-2xl">{sig}</span>
+                <span className="text-[10px]">拍</span>
+              </motion.button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Control Buttons */}
+      <div className="p-6 bg-slate-900 flex gap-4">
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={stopMetronome}
+          className="flex-1 py-4 rounded-2xl font-bold text-lg bg-slate-700 text-white flex items-center justify-center gap-2"
         >
-          <Minus size={16} />
-        </button>
-        <button
-          onClick={handleMaximize}
-          className="w-11 h-8 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+          <SkipBack size={24} /> 重置
+        </motion.button>
+        <motion.button
+          whileTap={{ scale: 0.95 }}
+          onClick={isPlaying ? stopMetronome : startMetronome}
+          className={`flex-1 py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-2 ${
+            isPlaying ? 'bg-red-500 text-white' : 'bg-teal-500 text-white'
+          }`}
         >
-          <Square size={12} />
-        </button>
-        <button
-          onClick={handleClose}
-          className="w-11 h-8 flex items-center justify-center text-white/70 hover:text-white hover:bg-red-500 transition-colors"
-        >
-          <X size={16} />
-        </button>
+          {isPlaying ? (
+            <>
+              <Pause size={24} /> 暂停
+            </>
+          ) : (
+            <>
+              <Play size={24} /> 开始
+            </>
+          )}
+        </motion.button>
       </div>
     </div>
   );
 }
 
 export default function App() {
-  const [now, setNow] = useState(new Date());
-  const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const lastNotifiedRef = useRef<number | null>(null);
-
-  // Initialize from LocalStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('kegel_checkins');
-    if (saved) {
-      try {
-        setCheckIns(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse history', e);
-      }
-    }
-
-    const savedSound = localStorage.getItem('kegel_sound');
-    if (savedSound !== null) {
-      setSoundEnabled(savedSound === 'true');
-    }
-  }, []);
-
-  // Sync to LocalStorage
-  useEffect(() => {
-    localStorage.setItem('kegel_checkins', JSON.stringify(checkIns));
-  }, [checkIns]);
-
-  useEffect(() => {
-    localStorage.setItem('kegel_sound', String(soundEnabled));
-  }, [soundEnabled]);
-
-  // Start/stop timer
-  useEffect(() => {
-    invoke('start_timer');
-    return () => {
-      invoke('stop_timer');
-    };
-  }, []);
-
-  // Listen for timer ticks
-  useEffect(() => {
-    const unlisten = listen('timer_tick', () => {
-      const currentTime = new Date();
-      setNow(currentTime);
-      checkReminder(currentTime);
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [notificationsEnabled, soundEnabled]);
-
-  const checkReminder = (date: Date) => {
-    const minutes = date.getMinutes();
-    const seconds = date.getSeconds();
-    
-    // Check if it's 0 or 30 minutes past the hour
-    if ((minutes === 0 || minutes === 30) && seconds === 0) {
-      const timestamp = Math.floor(date.getTime() / 60000); // Unique per minute
-      if (lastNotifiedRef.current !== timestamp) {
-        lastNotifiedRef.current = timestamp;
-        triggerReminder(date);
-      }
-    }
-  };
-
-  const triggerReminder = (date: Date) => {
-    if (notificationsEnabled) {
-      sendNotification({
-        title: '🌈 嘿！提肛时间到啦！',
-        body: `现在是 ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}，来一次快乐的练习吧！`,
-        icon: '/favicon.ico' // 可选
-      });
-    }
-
-    if (soundEnabled) {
-      playReminderSound();
-    }
-  };
-
-  const playReminderSound = () => {
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime); // High pop sound
-      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.4, audioCtx.currentTime + 0.05);
-      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
-
-      oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.4);
-    } catch (e) {
-      console.warn('Audio failed', e);
-    }
-  };
-
-  const handleCheckIn = () => {
-    const minutes = now.getMinutes();
-    const isScheduled = (minutes >= 0 && minutes <= 5) || (minutes >= 30 && minutes <= 35);
-    
-    const newCheckIn: CheckIn = {
-      id: crypto.randomUUID(),
-      timestamp: now.getTime(),
-      type: isScheduled ? 'scheduled' : 'manual'
-    };
-
-    setCheckIns(prev => [newCheckIn, ...prev].slice(0, 100));
-  };
-
-  const toggleNotifications = () => {
-    setNotificationsEnabled(prev => !prev);
-  };
-
-  const clearHistory = () => {
-    if (confirm('要把这些可爱的回忆都删掉吗？(o_O)?')) {
-      setCheckIns([]);
-    }
-  };
-
-  const todayCheckIns = checkIns.filter(c => new Date(c.timestamp).toDateString() === now.toDateString()).length;
+  const [activeTab, setActiveTab] = useState<TabType>('tuner');
 
   return (
-    <>
-      <TitleBar />
-      <div className="min-h-screen mt-10 p-4 md:p-8 flex flex-col max-w-5xl mx-auto selection:bg-dopa-pink selection:text-white">
-
-        {/* Playful Decorative Icons */}
-        <div className="fixed top-0 left-0 text-dopa-pink/20 animate-float pointer-events-none -z-10 hidden lg:block opacity-30">
-          <img src={img6413} alt="Dopa Icon" className="w-[100vw] object-contain" />
-        </div>
-        <div className="fixed bottom-20 right-10 text-dopa-yellow/20 animate-float [animation-delay:1.5s] pointer-events-none -z-10 hidden lg:block">
-          <Star size={100} />
-        </div>
-
-        {/* Header Section */}
-        <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-6">
-          <div className="flex flex-col items-center md:items-start">
-            <motion.div 
-              whileHover={{ rotate: [0, 10, -10, 0] }}
-              className="flex items-center gap-3 mb-2"
-            >
-              <div className="w-14 h-14 bg-dopa-pink dopa-card flex items-center justify-center text-white border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] rounded-next-level">
-                <Smile size={32} />
-              </div>
-              <h1 className="text-4xl font-bold text-slate-900 tracking-tight">
-                快乐提肛 <span className="text-dopa-pink font-extrabold font-mono italic">Lab</span>
-              </h1>
-            </motion.div>
-            <p className="text-slate-500 font-bold bg-dopa-yellow/30 px-3 py-1 rounded-full text-sm">
-              元气满满每一天 · 多巴胺健康伴侣
-            </p>
-          </div>
-          
-          <div className="flex items-center gap-4 bg-white p-4 dopa-card border-2">
-            <div className="text-right">
-              <p className="text-[10px] text-slate-400 uppercase tracking-widest font-black">Status Center</p>
-              <div className="flex items-center gap-2">
-                <span className={`w-3 h-3 rounded-full ${notificationsEnabled ? 'bg-dopa-green shadow-[0_0_8px_#6BCB77]' : 'bg-slate-300'}`}></span>
-                <p className="text-sm font-black text-slate-700">{notificationsEnabled ? '雷达已就绪' : '雷达待命中'}</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button 
-                onClick={toggleNotifications}
-                className={`p-3 dopa-btn transition-colors ${notificationsEnabled ? 'bg-dopa-blue text-white' : 'bg-white text-slate-400'}`}
-              >
-                {notificationsEnabled ? <Bell size={20} /> : <BellOff size={20} />}
-              </button>
-              <button 
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className={`p-3 dopa-btn transition-colors ${soundEnabled ? 'bg-dopa-purple text-white' : 'bg-white text-slate-400'}`}
-              >
-                {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Main Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 flex-grow">
-          
-          {/* Clock Card - Dopamine Blue */}
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="md:col-span-4 dopa-card bg-dopa-blue/10 p-8 flex flex-col justify-between relative overflow-hidden"
-          >
-            <div className="absolute -top-6 -left-6 opacity-10 text-dopa-blue rotate-12">
-              <img src={img6412} alt="Dopa Icon" className="w-[160px] object-contain" />
-            </div>
-            
-            <div className="relative z-10 flex flex-col items-center flex-grow justify-center">
-              <div className="text-6xl font-black text-dopa-blue tracking-tighter tabular-nums mb-2 leading-none">
-                {now.getHours().toString().padStart(2, '0')}:
-                {now.getMinutes().toString().padStart(2, '0')}
-              </div>
-              <div className="font-mono text-2xl text-dopa-blue/60 font-bold mb-4">
-                {now.getSeconds().toString().padStart(2, '0')}
-              </div>
-              <div className="bg-white border-2 border-slate-900 px-4 py-2 rounded-full font-bold text-slate-700 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] text-xs flex items-center gap-2">
-                <Calendar size={14} className="text-dopa-pink" />
-                {now.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', weekday: 'short' })}
-              </div>
-            </div>
-
-            <div className="mt-8 bg-white border-4 border-slate-900 rounded-[1.5rem] p-4 text-center">
-              <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 mb-1">Coming Up Next</p>
-              <div className="flex items-center justify-center gap-2 text-dopa-blue font-black text-xl italic">
-                <Timer size={20} />
-                {now.getMinutes() < 30 ? `${now.getHours()}:30` : `${(now.getHours() + 1) % 24}:00`}
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Main Action - Multi-color Punch Card */}
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="md:col-span-8 dopa-card bg-dopa-yellow p-8 relative overflow-hidden flex flex-col justify-center"
-          >
-            <div className="absolute top-0 right-0 p-8 opacity-20 text-slate-900 rotate-12 pointer-events-none">
-              <img src={img6411} alt="Dopa Icon" className="w-[200px] object-contain" />
-            </div>
-
-            <div className="relative z-10">
-              <motion.div
-                animate={{ rotate: [0, -2, 2, 0] }}
-                transition={{ repeat: Infinity, duration: 4 }}
-              >
-                <h2 className="text-5xl font-black text-slate-900 mb-4 tracking-tighter leading-tight drop-shadow-sm">
-                  能量时刻！<br/>
-                  <span className="text-white drop-shadow-[4px_4px_0px_rgba(15,23,42,1)]">释放盆底原力</span>
-                </h2>
-              </motion.div>
-              
-              <p className="text-slate-800 text-lg mb-8 max-w-sm font-bold opacity-80 leading-relaxed">
-                坚持提肛，做个快乐的健康达人！每次 5~10 秒，让身体充满活力 ✨
-              </p>
-
-              <motion.button 
-                whileHover={{ scale: 1.05, rotate: 2 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleCheckIn}
-                className="bg-dopa-pink text-white font-black py-5 px-12 rounded-[2rem] border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all text-2xl flex items-center gap-4 group"
-              >
-                <Zap size={28} className="group-hover:animate-pulse" />
-                打个卡先！
-              </motion.button>
-            </div>
-          </motion.div>
-
-          {/* Stats - Dopamine Pink */}
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="md:col-span-4 dopa-card bg-dopa-pink/10 p-8 flex flex-col items-center justify-center text-center"
-          >
-            <p className="text-xs font-black text-dopa-pink uppercase tracking-widest mb-6 border-b-2 border-dopa-pink/20 pb-1">Today's Goal</p>
-            
-            <div className="relative w-44 h-44 flex items-center justify-center mb-6">
-              <div className="absolute inset-0 bg-white rounded-full border-4 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]"></div>
-              <svg className="w-36 h-36 -rotate-90 relative z-10">
-                <circle cx="72" cy="72" r="64" fill="none" stroke="#FEE2E2" strokeWidth="12" />
-                <circle 
-                  cx="72" cy="72" r="64" fill="none" 
-                  stroke="#FF6B9D" strokeWidth="12" 
-                  strokeDasharray="402" 
-                  strokeDashoffset={402 - (402 * Math.min(todayCheckIns, 16) / 16)} 
-                  strokeLinecap="round" 
-                  className="transition-all duration-1000"
-                />
-              </svg>
-              <div className="absolute text-center z-10">
-                <p className="text-5xl font-black text-slate-900 -tracking-widest">{todayCheckIns}</p>
-                <p className="text-[10px] text-dopa-pink font-bold uppercase tracking-tight">/ 16 Times</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-dopa-pink font-black text-sm">
-              <Trophy size={18} />
-              胜过 99% 的养生仙女/男神
-            </div>
-          </motion.div>
-
-          {/* History - Dopamine Green */}
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="md:col-span-4 dopa-card bg-dopa-green/10 p-6 flex flex-col"
-          >
-            <div className="flex justify-between items-center mb-6 border-b-4 border-slate-900 pb-2">
-              <p className="text-xs font-black text-dopa-green uppercase tracking-widest flex items-center gap-2">
-                <History size={16} /> History Log
-              </p>
-              <button 
-                onClick={clearHistory}
-                className="text-slate-400 hover:text-red-500 transition-colors"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-            
-            <div className="space-y-3 flex-grow overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
-              {checkIns.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center py-10 opacity-30">
-                  <Heart size={40} className="text-dopa-pink mb-2" />
-                  <p className="text-xs font-bold font-mono">Waiting for your 1st move!</p>
-                </div>
-              ) : (
-                checkIns.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between p-4 bg-white rounded-2xl border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-lg border-2 border-slate-900 flex items-center justify-center ${item.type === 'scheduled' ? 'bg-dopa-green text-white' : 'bg-dopa-yellow text-slate-700'}`}>
-                        <Zap size={14} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-black text-slate-700">
-                          {new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                        <p className="text-[10px] text-slate-400 font-bold font-mono">{new Date(item.timestamp).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                    <span className={`text-[10px] font-black px-2 py-1 rounded-lg border-2 border-slate-900 ${
-                      item.type === 'scheduled' ? 'bg-dopa-green text-white' : 'bg-white text-slate-600'
-                    }`}>
-                      {item.type === 'scheduled' ? 'Perfect' : 'Boost'}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </motion.div>
-
-          {/* Tip Card - Dopamine Purple */}
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="md:col-span-4 dopa-card bg-dopa-purple/10 p-8 flex flex-col justify-between"
-          >
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-12 h-12 bg-dopa-purple dopa-card flex items-center justify-center text-white border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] rounded-next-level">
-                <Zap size={24} />
-              </div>
-              <span className="font-extrabold text-slate-700 text-lg tracking-tight">每日元气 Tip</span>
-            </div>
-
-            <div className="flex-grow flex flex-col justify-center">
-              <div className="relative mb-8">
-                <div className="absolute -top-4 -left-2 text-dopa-purple/20 font-serif text-6xl">"</div>
-                <p className="relative z-10 text-slate-700 text-lg font-bold leading-relaxed pl-4 italic">
-                  提肛不是任务，而是给身体的一次微型 SPA。坚持 52 天，你会发现全新的自己！
-                </p>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-white border-2 border-slate-900 rounded-[1.5rem] text-center shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]">
-                  <p className="text-dopa-orange font-black text-2xl">
-                    {new Set(checkIns.map(c => new Date(c.timestamp).toDateString())).size}
-                  </p>
-                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Days Logged</p>
-                </div>
-                <div className="p-4 bg-white border-2 border-slate-900 rounded-[1.5rem] text-center shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]">
-                  <p className="text-dopa-blue font-black text-2xl">{checkIns.length}</p>
-                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Pulses</p>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-
-        </div>
-
-        {/* Footer Bar */}
-        <footer className="mt-12 flex flex-col md:flex-row justify-between items-center text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] border-t-4 border-slate-900/5 pt-10 gap-6">
-          <div className="flex gap-8">
-            <button className="hover:text-dopa-pink transition-colors">Privacy Policy</button>
-            <button className="hover:text-dopa-blue transition-colors">Support Center</button>
-            <button className="hover:text-dopa-purple transition-colors">About Lab</button>
-          </div>
-          <div className="flex items-center gap-3 bg-slate-900 text-white px-4 py-2 rounded-full font-mono italic">
-            <motion.span 
-              animate={{ scale: [1, 1.2, 1] }} 
-              transition={{ repeat: Infinity, duration: 2 }}
-              className="w-2 h-2 rounded-full bg-dopa-green"
-            ></motion.span>
-            System Active | Dopa v3.0 Powered
-          </div>
-        </footer>
+    <div className="h-screen flex flex-col bg-slate-900 overflow-hidden">
+      {/* Tab Navigation */}
+      <div className="flex bg-slate-800 border-b border-slate-700">
+        <button
+          onClick={() => setActiveTab('tuner')}
+          className={`flex-1 py-4 flex items-center justify-center gap-2 font-bold transition-colors ${
+            activeTab === 'tuner'
+              ? 'text-teal-400 border-b-2 border-teal-400 bg-slate-700/50'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Music size={20} />
+          调音器
+        </button>
+        <button
+          onClick={() => setActiveTab('metronome')}
+          className={`flex-1 py-4 flex items-center justify-center gap-2 font-bold transition-colors ${
+            activeTab === 'metronome'
+              ? 'text-teal-400 border-b-2 border-teal-400 bg-slate-700/50'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Timer size={20} />
+          节拍器
+        </button>
       </div>
-    </>
+
+      {/* Content */}
+      <div className="flex-grow overflow-hidden">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, x: activeTab === 'tuner' ? -20 : 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: activeTab === 'tuner' ? 20 : -20 }}
+            transition={{ duration: 0.2 }}
+            className="h-full"
+          >
+            {activeTab === 'tuner' ? <TunerView /> : <MetronomeView />}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </div>
   );
 }

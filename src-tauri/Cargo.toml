@@ -1,14 +1,12 @@
 [package]
-name = "kegel-lab"
+name = "guitar-tuner"
 version = "0.1.0"
-description = "快乐提肛Lab - 提肛打卡助手"
+description = "Guitar Tuner & Metronome App"
 authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "app_lib"

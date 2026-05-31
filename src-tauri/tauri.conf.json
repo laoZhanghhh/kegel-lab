@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "快乐提肛Lab",
+  "productName": "Guitar Tuner &amp; Metronome",
   "version": "0.1.0",
-  "identifier": "com.kegel.lab",
+  "identifier": "com.guitar.tuner",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
@@ -12,15 +12,14 @@
   "app": {
     "windows": [
       {
-        "title": "快乐提肛Lab",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
+        "title": "Guitar Tuner &amp; Metronome",
+        "width": 400,
+        "height": 700,
+        "minWidth": 360,
         "minHeight": 600,
-        "resizable": true,
+        "resizable": false,
         "fullscreen": false,
-        "center": true,
-        "decorations": false
+        "center": true
       }
     ],
     "security": {
@@ -37,16 +36,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "Lifestyle",
-    "shortDescription": "提肛打卡助手 - 快乐健康每一天",
-    "longDescription": "一款可爱的提肛打卡助手应用，帮助你养成健康的提肛习惯",
-    "windows": {
-      "wix": {
-        "language": "zh-CN"
-      },
-      "nsis": {
-        "languages": ["SimpChinese"]
-      }
+    "category": "Music",
+    "shortDescription": "Guitar Tuner &amp; Metronome App",
+    "longDescription": "A guitar tuner and metronome app for Android",
+    "android": {
+      "minSdkVersion": 24
     }
   }
 }

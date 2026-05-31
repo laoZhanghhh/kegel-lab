@@ -1,6 +1,6 @@
 {
-  "name": "提肛打卡助手",
-  "description": "浅蓝简约风格的提肛运动提醒与打卡应用，每整点及半点自动提醒。",
-  "requestFramePermissions": ["notifications"],
+  "name": "Guitar Tuner & Metronome",
+  "description": "A guitar tuner and metronome app for Android",
+  "requestFramePermissions": [],
   "majorCapabilities": []
 }
