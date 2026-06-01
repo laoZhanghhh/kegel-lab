@@ -1,48 +1,29 @@
-@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&family=Gaegu:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Quicksand", "Gaegu", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  
-  --color-dopa-pink: #FF6B9D;
-  --color-dopa-yellow: #FFD93D;
-  --color-dopa-green: #6BCB77;
-  --color-dopa-blue: #4D96FF;
-  --color-dopa-purple: #9A66FF;
-  --color-dopa-orange: #FF9E64;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-sans: "Inter", sans-serif;
 }
 
 body {
-  @apply bg-[#FDF4F5] text-slate-800 antialiased font-sans transition-colors duration-500;
+  margin: 0;
+  overflow: hidden;
+  background-color: #050505;
+  color: #ffffff;
+  font-family: var(--font-sans);
 }
 
-.dopa-card {
-  @apply bg-white rounded-[2.5rem] border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] transition-all duration-300;
+canvas {
+  display: block;
 }
 
-.dopa-btn {
-  @apply rounded-[2rem] border-4 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all;
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+.pulsing {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  @apply bg-dopa-pink/30 rounded-full;
-}
-
-@keyframes float {
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-  100% { transform: translateY(0px); }
-}
-
-.animate-float {
-  animation: float 3s ease-in-out infinite;
-}
